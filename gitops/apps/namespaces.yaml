@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: namespaces
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-2" # namespaces before the apps deployed into them
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io # deleting the Application deletes its resources
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/Viktorbss/aspecta.git
+    targetRevision: main
+    path: gitops/namespaces
+  destination:
+    server: https://kubernetes.default.svc
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

@@ -1,0 +1,5 @@
+# Values for the Argo CD Helm chart installed by scripts/bootstrap.sh.
+dex:
+  enabled: false # no SSO; the local admin user is enough for this environment
+notifications:
+  enabled: false

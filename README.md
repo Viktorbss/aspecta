@@ -107,6 +107,68 @@ Delete the cluster:
 kind delete cluster --name aspecta
 ```
 
+## GitOps (Argo CD)
+
+`scripts/bootstrap.sh` installs Argo CD and applies one Application by hand: `gitops/root-app.yaml`.
+From then on the cluster follows the `main` branch of this repository.
+
+```
+gitops/
+├── root-app.yaml         Application "root", syncs gitops/apps/ ("app of apps")
+├── apps/
+│   ├── projects.yaml     AppProjects "platform" and "aspecta"       wave -3
+│   ├── namespaces.yaml   Application → gitops/namespaces/            wave -2
+│   ├── traefik.yaml      Application → Traefik Helm chart            wave -1
+│   ├── metrics-server.yaml  Application → metrics-server Helm chart  wave -1
+│   └── aspecta.yaml      Application → charts/aspecta                wave 0
+└── namespaces/           Namespaces with Pod Security labels
+```
+
+| Application | Project | Namespace | Source |
+|---|---|---|---|
+| `namespaces` | platform | – | `gitops/namespaces` |
+| `traefik` | platform | `traefik` | Traefik chart 42.1.3 (Traefik v3.7.16) |
+| `metrics-server` | platform | `kube-system` | metrics-server chart 3.14.0 |
+| `aspecta` | aspecta | `aspecta` | `charts/aspecta` |
+
+Design notes:
+
+- **App of apps.** Adding a manifest to `gitops/apps/` deploys a new component; deleting it removes the
+  component (`prune` and the `resources-finalizer`).
+- **Self-healing.** Every Application syncs automatically with `prune` and `selfHeal`. A manual change in
+  the cluster, such as scaling a Deployment, is reverted to the state in Git.
+- **Sync waves** order the first sync: projects, then namespaces, then add-ons, then the application.
+  `retry` covers the rest, e.g. a CRD that is not established yet.
+- **AppProjects as guardrails.** `platform` may install cluster-scoped resources (CRDs, ClusterRoles,
+  IngressClass). `aspecta` may only deploy from this repository into the `aspecta` namespace and cannot
+  create any cluster-scoped resource.
+- **Namespaces live in Git** with their Pod Security labels: `aspecta` enforces `restricted`, `traefik`
+  enforces `baseline` and warns on `restricted`.
+- **Ingress.** Traefik's Service is a NodePort (30080/30443), which kind maps to `127.0.0.1:80/443`.
+  The application is at http://aspecta.localhost.
+- **Bootstrap outside Git.** Calico (Argo CD needs a pod network) and Argo CD itself are installed by the
+  script. In production Argo CD would also manage itself.
+- **Images.** Until CI publishes images to GHCR, the `aspecta` Application adds `values-local.yaml`, so
+  the locally built images must be loaded with `kind load` (see "Install manually" below).
+
+Access the Argo CD UI:
+
+```bash
+kubectl -n argocd port-forward svc/argocd-server 8443:443
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+```
+
+Open https://localhost:8443 and log in as `admin`.
+
+Verify:
+
+```bash
+kubectl -n argocd get applications      # all Synced and Healthy
+curl -s http://aspecta.localhost/api/info
+kubectl top pods -n aspecta             # metrics-server works
+kubectl get hpa -n aspecta              # CPU targets instead of <unknown>
+```
+
 ## Helm chart
 
 `charts/aspecta` deploys both components into one namespace.

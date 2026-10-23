@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Create the local kind cluster "aspecta" with Calico as CNI.
+# Create the local kind cluster "aspecta" with Calico as CNI, install Argo CD and hand over to GitOps.
+# Calico and Argo CD are the only components installed outside Git: everything else is synced by
+# Argo CD from gitops/ in the GitHub repository.
 #
-# Idempotent: an existing cluster is reused and Calico is upgraded in place.
+# Idempotent: an existing cluster is reused, Calico and Argo CD are upgraded in place.
 # Every kubectl/helm call is pinned to the kind context, so other clusters in ~/.kube/config are never touched.
 #
 # Usage: scripts/bootstrap.sh
@@ -10,6 +12,7 @@ set -euo pipefail
 CLUSTER_NAME=aspecta
 CONTEXT="kind-$CLUSTER_NAME"
 CALICO_VERSION=v3.33.0
+ARGOCD_CHART_VERSION=10.10.5 # Argo CD v3.5.5
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -48,4 +51,23 @@ log "Waiting for all nodes to become Ready"
 kubectl --context "$CONTEXT" wait --for=condition=Ready nodes --all --timeout=300s
 
 kubectl --context "$CONTEXT" get nodes -o wide
+
+log "Installing Argo CD (chart $ARGOCD_CHART_VERSION)"
+helm upgrade --install argocd argo-cd \
+  --repo https://argoproj.github.io/argo-helm --version "$ARGOCD_CHART_VERSION" \
+  --namespace argocd --create-namespace \
+  --values "$ROOT/cluster/argocd-values.yaml" \
+  --kube-context "$CONTEXT" --wait
+
+# from here on Argo CD syncs gitops/apps/ from GitHub ("app of apps")
+log "Applying the root Application"
+kubectl --context "$CONTEXT" apply -f "$ROOT/gitops/root-app.yaml"
+
 log "Cluster ready. kubectl context: $CONTEXT"
+cat <<EOF
+
+Argo CD UI:
+  kubectl -n argocd port-forward svc/argocd-server 8443:443
+  open https://localhost:8443 (user admin, self-signed certificate)
+  password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+EOF

@@ -1,0 +1,38 @@
+# AppProjects limit what each group of Applications may deploy, from where and to where.
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3" # projects must exist before the Applications that use them
+spec:
+  description: Cluster add-ons (namespaces, ingress controller, metrics-server)
+  sourceRepos:
+    - https://github.com/Viktorbss/aspecta.git
+    - https://traefik.github.io/charts
+    - https://kubernetes-sigs.github.io/metrics-server
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: "*"
+  # add-ons need cluster-scoped resources: Namespaces, CRDs, ClusterRoles, IngressClass
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: aspecta
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-3"
+spec:
+  description: The aspecta application
+  sourceRepos:
+    - https://github.com/Viktorbss/aspecta.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: aspecta
+  # no cluster-scoped resources: the application cannot create Namespaces, CRDs or ClusterRoles
+  clusterResourceWhitelist: []
