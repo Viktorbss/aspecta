@@ -16,12 +16,22 @@ spec:
     helm:
       valuesObject:
         service:
-          type: NodePort # kind has no LoadBalancer; cluster/kind-config.yaml maps these NodePorts to 127.0.0.1
+          spec:
+            type: NodePort # kind has no LoadBalancer; cluster/kind-config.yaml maps these NodePorts to 127.0.0.1
         ports:
           web:
             nodePort: 30080
           websecure:
             nodePort: 30443
+        providers:
+          kubernetesIngress:
+            # A NodePort Service has no external address to publish into the Ingress status, so Traefik
+            # writes the address the application is reachable at. Argo CD reports an Ingress without
+            # an address as Progressing forever.
+            publishedService:
+              enabled: false
+            ingressEndpoint:
+              ip: 127.0.0.1
   destination:
     server: https://kubernetes.default.svc
     namespace: traefik
