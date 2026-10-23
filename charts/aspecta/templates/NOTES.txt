@@ -1,0 +1,11 @@
+aspecta {{ .Chart.AppVersion }} is deployed to namespace {{ .Release.Namespace }}.
+
+{{- if .Values.ingress.enabled }}
+
+Through the ingress controller ({{ .Values.ingress.className }}):
+  http://{{ .Values.ingress.host }}
+{{- end }}
+
+Without an ingress controller:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/frontend 8080:{{ .Values.frontend.port }}
+  open http://localhost:8080

@@ -1,0 +1,15 @@
+{{- range $name := list "frontend" "backend" }}
+---
+# keeps at least one replica running while nodes are drained
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" $name) | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "aspecta.selectorLabels" (dict "root" $ "component" $name) | nindent 6 }}
+{{- end }}

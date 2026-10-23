@@ -1,0 +1,6 @@
+apiVersion: v2
+name: aspecta
+description: Frontend (nginx) and backend (FastAPI) of the aspecta demo application
+type: application
+version: 0.1.0 # chart version, bumped by CI on every release
+appVersion: "0.1.0" # application version, set by CI

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>aspecta</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; color: #1d2733; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.4rem 1rem; }
+    dt { color: #5a6775; }
+    dd { margin: 0; font-family: ui-monospace, monospace; }
+    table { border-collapse: collapse; margin-top: 0.8rem; }
+    th, td { text-align: left; padding: 0.2rem 1.2rem 0.2rem 0; }
+    td { font-family: ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+    th { color: #5a6775; font-weight: normal; }
+    h2 { margin-top: 2.5rem; font-size: 1.2rem; }
+    .error { color: #b23c2a; }
+  </style>
+</head>
+<body>
+  <h1>aspecta</h1>
+  <p id="message">Loading…</p>
+  <dl>
+    <dt>Backend pod</dt><dd id="hostname">–</dd>
+    <dt>Version</dt><dd id="version">–</dd>
+    <dt>Secret configured</dt><dd id="secret">–</dd>
+  </dl>
+  <button id="reload" type="button">Call backend again</button>
+
+  <h2>Load test</h2>
+  <p>Sends parallel CPU-heavy requests to the backend for 60 seconds. When the HorizontalPodAutoscaler
+    adds replicas, new pods show up in the table.</p>
+  <button id="load" type="button">Generate load (60 s)</button>
+  <p id="load-status"></p>
+  <table id="pods" hidden>
+    <thead><tr><th>Backend pod</th><th>Requests</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    const field = (id) => document.getElementById(id);
+
+    async function load() {
+      try {
+        const response = await fetch("/api/info");
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const info = await response.json();
+        field("message").textContent = info.message;
+        field("message").className = "";
+        field("hostname").textContent = info.hostname;
+        field("version").textContent = info.version;
+        field("secret").textContent = info.secret_configured ? "yes" : "no";
+      } catch (error) {
+        field("message").textContent = `Backend unavailable: ${error.message}`;
+        field("message").className = "error";
+      }
+    }
+
+    field("reload").addEventListener("click", load);
+    load();
+
+    // --- load test ---
+    const LOAD_SECONDS = 60;
+    const PARALLEL = 6; // browsers open at most 6 connections per host over HTTP/1.1
+    const WORK_MS = 100;
+    let loadUntil = 0;
+    let counts = new Map(); // pod hostname -> answered requests, in order of first answer
+    let errors = 0;
+
+    async function worker() {
+      while (Date.now() < loadUntil) {
+        try {
+          const response = await fetch(`/api/work?ms=${WORK_MS}`, { cache: "no-store" });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const { hostname } = await response.json();
+          counts.set(hostname, (counts.get(hostname) || 0) + 1);
+        } catch {
+          errors += 1;
+        }
+      }
+    }
+
+    function render() {
+      const left = Math.max(0, Math.ceil((loadUntil - Date.now()) / 1000));
+      const total = [...counts.values()].reduce((a, b) => a + b, 0);
+      field("load-status").textContent =
+        `${left > 0 ? `Running, ${left} s left` : "Finished"} · ${total} requests · ${errors} errors · ${counts.size} pods`;
+      const rows = [...counts].map(([pod, n]) => {
+        const row = document.createElement("tr");
+        row.append(Object.assign(document.createElement("td"), { textContent: pod }));
+        row.append(Object.assign(document.createElement("td"), { textContent: n }));
+        return row;
+      });
+      document.querySelector("#pods tbody").replaceChildren(...rows);
+      field("pods").hidden = counts.size === 0;
+    }
+
+    field("load").addEventListener("click", async () => {
+      if (Date.now() < loadUntil) {
+        loadUntil = 0; // stop: workers finish their current request and exit
+        return;
+      }
+      counts = new Map();
+      errors = 0;
+      loadUntil = Date.now() + LOAD_SECONDS * 1000;
+      field("load").textContent = "Stop";
+      const timer = setInterval(render, 500);
+      await Promise.all(Array.from({ length: PARALLEL }, worker));
+      clearInterval(timer);
+      render();
+      field("load").textContent = `Generate load (${LOAD_SECONDS} s)`;
+    });
+  </script>
+</body>
+</html>

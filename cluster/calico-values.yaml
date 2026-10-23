@@ -1,0 +1,9 @@
+# Values for the tigera-operator Helm chart; `installation` becomes the spec of the Installation resource.
+installation:
+  calicoNetwork:
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: 10.244.0.0/16 # must match networking.podSubnet in cluster/kind-config.yaml
+        encapsulation: VXLANCrossSubnet
+        natOutgoing: Enabled
+        nodeSelector: all()

@@ -1,0 +1,13 @@
+# Locally built images loaded into kind with `kind load docker-image` (see README, "Helm chart").
+# pullPolicy Never: the node must use the loaded image and never try a registry.
+backend:
+  image:
+    repository: aspecta-backend
+    tag: dev
+    pullPolicy: Never
+
+frontend:
+  image:
+    repository: aspecta-frontend
+    tag: dev
+    pullPolicy: Never

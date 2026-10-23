@@ -1,0 +1,83 @@
+# One release per namespace: the Services are named "frontend" and "backend",
+# because nginx in the frontend proxies /api/ to http://backend:8000.
+
+backend:
+  image:
+    repository: ghcr.io/viktorbss/aspecta-backend
+    tag: dev # set by CI to sha-<commit>
+    pullPolicy: IfNotPresent
+  port: 8000
+  replicas: 2 # used only when autoscaling is disabled
+  resources:
+    requests:
+      cpu: 100m # the HPA target is a percentage of this value
+      memory: 96Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 50
+  # rendered into the ConfigMap "backend-config" and exposed as environment variables
+  config:
+    APP_MESSAGE: Hello from Kubernetes
+    LOG_LEVEL: info
+  # Secret with API_KEY, exposed as environment variables. Optional: pods start without it.
+  secretName: backend-secret
+
+frontend:
+  image:
+    repository: ghcr.io/viktorbss/aspecta-frontend
+    tag: dev # set by CI to sha-<commit>
+    pullPolicy: IfNotPresent
+  port: 8080
+  replicas: 2 # used only when autoscaling is disabled
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+
+# shared by both HPAs: scale up fast, scale down after a minute, so the load demo is easy to watch
+autoscalingBehavior:
+  scaleUp:
+    stabilizationWindowSeconds: 0
+    policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 15
+  scaleDown:
+    stabilizationWindowSeconds: 60
+    policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 30
+
+podDisruptionBudget:
+  minAvailable: 1
+
+# Pod Security "restricted" compliant; the images already run as a numeric non-root UID
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+ingress:
+  enabled: true
+  className: traefik
+  host: aspecta.localhost

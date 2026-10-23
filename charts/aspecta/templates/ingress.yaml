@@ -1,0 +1,22 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: aspecta
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "frontend") | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  rules:
+    - host: {{ .Values.ingress.host }}
+      http:
+        paths:
+          # everything goes to the frontend; nginx there proxies /api/ to the backend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  name: http
+{{- end }}

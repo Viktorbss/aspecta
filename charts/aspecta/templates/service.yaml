@@ -1,0 +1,18 @@
+{{- range $name := list "frontend" "backend" }}
+{{- $c := index $.Values $name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" $name) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aspecta.selectorLabels" (dict "root" $ "component" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $c.port }}
+      targetPort: http
+{{- end }}

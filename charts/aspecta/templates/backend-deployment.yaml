@@ -1,0 +1,77 @@
+{{- $c := .Values.backend }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "backend") | nindent 4 }}
+spec:
+  {{- if not $c.autoscaling.enabled }}
+  replicas: {{ $c.replicas }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "aspecta.selectorLabels" (dict "root" $ "component" "backend") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aspecta.selectorLabels" (dict "root" $ "component" "backend") | nindent 8 }}
+      annotations:
+        # a changed ConfigMap changes this hash, which rolls the pods to pick up the new values
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: backend
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # spread replicas over the worker nodes
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "aspecta.selectorLabels" (dict "root" $ "component" "backend") | nindent 14 }}
+      containers:
+        - name: backend
+          image: "{{ $c.image.repository }}:{{ $c.image.tag }}"
+          imagePullPolicy: {{ $c.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ $c.port }}
+          env:
+            - name: PORT
+              value: {{ $c.port | quote }}
+            - name: APP_VERSION
+              value: {{ $c.image.tag | quote }}
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: {{ $c.secretName }}
+                optional: true # pods also start before the Secret exists
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3 # generous: under CPU load requests queue behind /api/work
+            failureThreshold: 3
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # the only writable path; the root filesystem is read-only
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
