@@ -121,8 +121,10 @@ gitops/
 │   ├── traefik.yaml      Application → Traefik Helm chart            wave -1
 │   ├── metrics-server.yaml  Application → metrics-server Helm chart  wave -1
 │   ├── sealed-secrets.yaml  Application → sealed-secrets Helm chart  wave -1
+│   ├── aspecta-secrets.yaml Application → gitops/secrets/aspecta/    wave -1
 │   └── aspecta.yaml      Application → charts/aspecta                wave 0
-└── namespaces/           Namespaces with Pod Security labels
+├── namespaces/           Namespaces with Pod Security labels
+└── secrets/aspecta/      SealedSecrets, encrypted for this cluster
 ```
 
 | Application | Project | Namespace | Source |
@@ -131,6 +133,7 @@ gitops/
 | `traefik` | platform | `traefik` | Traefik chart 42.1.3 (Traefik v3.7.16) |
 | `metrics-server` | platform | `kube-system` | metrics-server chart 3.14.0 |
 | `sealed-secrets` | platform | `kube-system` | sealed-secrets chart 2.20.0 (controller v0.40.0) |
+| `aspecta-secrets` | aspecta | `aspecta` | `gitops/secrets/aspecta` |
 | `aspecta` | aspecta | `aspecta` | `charts/aspecta` |
 
 Design notes:
