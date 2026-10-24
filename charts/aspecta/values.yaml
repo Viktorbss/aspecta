@@ -4,7 +4,7 @@
 backend:
   image:
     repository: ghcr.io/viktorbss/aspecta-backend
-    tag: sha-357c52f # set by CI to sha-<commit>
+    tag: sha-c31311d # set by CI to sha-<commit>
     pullPolicy: IfNotPresent
   port: 8000
   replicas: 2 # used only when autoscaling is disabled
@@ -30,7 +30,7 @@ backend:
 frontend:
   image:
     repository: ghcr.io/viktorbss/aspecta-frontend
-    tag: sha-357c52f # set by CI to sha-<commit>
+    tag: sha-c31311d # set by CI to sha-<commit>
     pullPolicy: IfNotPresent
   port: 8080
   replicas: 2 # used only when autoscaling is disabled

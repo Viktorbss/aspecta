@@ -2,5 +2,5 @@ apiVersion: v2
 name: aspecta
 description: Frontend (nginx) and backend (FastAPI) of the aspecta demo application
 type: application
-version: 0.1.1 # chart version, bumped by CI on every release
-appVersion: "sha-357c52f" # application version, set by CI
+version: 0.1.2 # chart version, bumped by CI on every release
+appVersion: "sha-c31311d" # application version, set by CI
