@@ -4,6 +4,108 @@ Cloud native environment for a simple web application (Python backend + nginx fr
 local [kind](https://kind.sigs.k8s.io/) cluster, Helm chart, GitOps with Argo CD, CI/CD in GitHub Actions,
 monitoring with Prometheus and Alertmanager.
 
+## Architecture
+
+**Delivery.** CI builds images and writes the new tags to Git; Argo CD pulls Git into the cluster.
+Nothing outside the cluster has cluster credentials.
+
+```mermaid
+flowchart LR
+  dev[Developer] -->|git push| repo[("GitHub repo<br/>app/ charts/ gitops/")]
+  repo -->|"push to app/**"| gha["GitHub Actions<br/>release.yaml"]
+  gha -->|"images tagged sha-xxxxxxx"| ghcr[("GHCR<br/>images + chart")]
+  gha -->|"bump commit<br/>charts/aspecta"| repo
+  subgraph kind["kind cluster"]
+    argo["Argo CD<br/>app of apps"] -->|sync| workloads["Applications<br/>platform + aspecta"]
+  end
+  argo -->|"polls main (~3 min)"| repo
+  workloads -->|pull images| ghcr
+```
+
+**Runtime.** Only the flows below are allowed in the `aspecta` namespace (default deny + NetworkPolicies).
+
+```mermaid
+flowchart LR
+  browser[Browser] -->|"aspecta.localhost :80"| traefik
+  subgraph cluster["kind cluster · Calico CNI"]
+    subgraph traefikNs["traefik · PSA baseline"]
+      traefik[Traefik]
+    end
+    subgraph aspectaNs["aspecta · PSA restricted · default deny"]
+      fe["frontend<br/>nginx · HPA 2–4"] -->|":8000 /api/"| be["backend<br/>FastAPI · HPA 2–5"]
+      cm[ConfigMap] -.->|env| be
+      sec["Secret<br/>from SealedSecret"] -.->|env| be
+    end
+    subgraph monitoringNs["monitoring"]
+      prom[Prometheus] --> am[Alertmanager]
+    end
+    dns["CoreDNS<br/>kube-system"]
+    traefik -->|":8080"| fe
+    prom -->|"/metrics"| be
+    fe -.->|":53"| dns
+  end
+```
+
+## Endpoints
+
+All UIs go through Traefik on `127.0.0.1:80`; `*.localhost` resolves to the loopback address in common
+browsers and in `curl`. They are reachable from this machine only.
+
+| URL | What | Login |
+|---|---|---|
+| http://aspecta.localhost | the application | – |
+| http://argocd.localhost | Argo CD | `admin`, password below |
+| http://prometheus.localhost | Prometheus | – |
+| http://alertmanager.localhost | Alertmanager | – |
+
+```bash
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d; echo
+```
+
+## Quick start
+
+```bash
+git clone https://github.com/Viktorbss/aspecta.git && cd aspecta
+scripts/setup-workstation.sh      # tools + Docker; on WSL2 run `wsl --shutdown` when asked and re-run
+scripts/bootstrap.sh              # kind + Calico + Argo CD + root Application
+kubectl -n argocd get applications --watch   # ~5 minutes until all are Synced and Healthy
+```
+
+Then open http://aspecta.localhost.
+
+The cluster syncs this repository. The committed SealedSecret can only be decrypted by the cluster it
+was sealed for, so on any other cluster `aspecta-secrets` stays *Degraded* and the backend reports
+`secret_configured: false`. To run the whole loop (secrets, releases) on your own copy, see
+[Run it in your own fork](#run-it-in-your-own-fork).
+
+## How the assignment is covered
+
+| Requirement | Implementation |
+|---|---|
+| Deployment for frontend and backend | `charts/aspecta`: Deployments `frontend` and `backend` with HPA, PDB, probes, topology spread |
+| Service (ClusterIP + Ingress) | ClusterIP Services `frontend`, `backend`; Ingress `aspecta.localhost` via Traefik |
+| ConfigMap and Secret | ConfigMap `backend-config`; Secret `backend-secret` from a SealedSecret in Git |
+| Technologies | kind, Helm, FastAPI + nginx |
+| RBAC | read-only Role `aspecta-viewer`, ServiceAccounts without permissions, Argo CD AppProjects, `scripts/dev-user.sh` |
+| NetworkPolicy between namespaces / pods | default deny in `aspecta`; allowed: traefik → frontend, frontend → backend, monitoring → backend, DNS |
+| GitOps, automated deployment on Git change | Argo CD app of apps with automated sync, prune and self-heal |
+| CI/CD: container build, chart update on image change | `release.yaml`: build and push to GHCR, bump image tag and chart version, publish chart to GHCR |
+| Prometheus + Alertmanager, basic alerts | kube-prometheus-stack, ServiceMonitor, 5 alerts in a PrometheusRule, Alertmanager routing |
+| Scalability, security beyond the minimum | HPA with load demo, Pod Security `restricted`, read-only containers, Sealed Secrets, pinned and checksummed tooling |
+| README | this document |
+
+## Repository layout
+
+```
+app/backend/            FastAPI service, tests, Dockerfile
+app/frontend/           static page, nginx config, Dockerfile
+charts/aspecta/         Helm chart of the application
+cluster/                kind config, Calico and Argo CD values (installed by bootstrap.sh)
+gitops/                 everything Argo CD syncs: Applications, AppProjects, Namespaces, SealedSecrets
+scripts/                setup-workstation.sh, bootstrap.sh, seal-backend-secret.sh, dev-user.sh
+.github/workflows/      ci.yaml, release.yaml
+```
+
 ## Workstation setup
 
 `scripts/setup-workstation.sh` installs everything needed on the local machine.
@@ -154,19 +256,15 @@ Design notes:
 - **Ingress.** Traefik's Service is a NodePort (30080/30443), which kind maps to `127.0.0.1:80/443`.
   The application is at http://aspecta.localhost.
 - **Bootstrap outside Git.** Calico (Argo CD needs a pod network) and Argo CD itself are installed by the
-  script. In production Argo CD would also manage itself.
+  script with `cluster/calico-values.yaml` and `cluster/argocd-values.yaml`; after changing those,
+  re-run `scripts/bootstrap.sh`. In production Argo CD would also manage itself.
+- **Argo CD UI** is served through Traefik at http://argocd.localhost. `argocd-server` runs with
+  `server.insecure: true`, because Traefik talks plain HTTP to it; there is no TLS locally.
 - **Images** come from GHCR (`ghcr.io/viktorbss/aspecta-*`, public) with the tags the release workflow
   commits to `charts/aspecta/values.yaml`. `values-local.yaml` is only for installing the chart by hand
   with locally built images (see "Install manually" below).
 
-Access the Argo CD UI:
-
-```bash
-kubectl -n argocd port-forward svc/argocd-server 8443:443
-kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
-```
-
-Open https://localhost:8443 and log in as `admin`.
+Open http://argocd.localhost and log in as `admin` with the password from [Endpoints](#endpoints).
 
 Verify:
 
@@ -261,15 +359,13 @@ kind-specific choices:
 - **No Grafana.** Not required for the task, and it would need its admin password handled as a secret.
   Prometheus and Alertmanager have their own UIs.
 - **Short retention** (2 days) and modest resource requests.
+- **UIs through Traefik** at http://prometheus.localhost and http://alertmanager.localhost, without a
+  login; the port mapping binds to 127.0.0.1, so only this machine reaches them. `externalUrl` makes the
+  links in alerts point there.
 
 ### Use
 
-```bash
-kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090    # http://localhost:9090
-kubectl -n monitoring port-forward svc/kube-prometheus-stack-alertmanager 9093  # http://localhost:9093
-```
-
-In Prometheus: *Status → Targets* shows `serviceMonitor/aspecta/backend/0` with two targets up;
+In Prometheus (http://prometheus.localhost): *Status → Targets* shows `serviceMonitor/aspecta/backend/0` with two targets up;
 *Alerts* lists the five `Aspecta*` rules.
 
 Useful queries:
@@ -583,3 +679,56 @@ Clean up:
 ```bash
 docker rm -f frontend backend && docker network rm aspecta
 ```
+
+## Run it in your own fork
+
+The repository URL and the GHCR owner are written into the manifests. In a fork:
+
+```bash
+# 1. point Argo CD and the image references at the fork (GHCR names must be lowercase)
+grep -rl 'github.com/Viktorbss/aspecta' gitops | xargs sed -i 's#github.com/Viktorbss/aspecta#github.com/<owner>/<repo>#g'
+grep -rl 'ghcr.io/viktorbss' charts .github | xargs sed -i 's#ghcr.io/viktorbss#ghcr.io/<owner-lowercase>#g'
+git commit -am "Point manifests at the fork" && git push
+
+# 2. create the cluster; it syncs the fork
+scripts/bootstrap.sh
+
+# 3. seal the secret for this cluster, commit, restart the backend once
+scripts/seal-backend-secret.sh
+git add gitops/secrets && git commit -m "Seal backend secret for this cluster" && git push
+kubectl -n aspecta rollout restart deployment/backend
+```
+
+4. Run *Release* manually in GitHub Actions and make the three GHCR packages public
+   (see [First release](#first-release)).
+
+## Differences from production
+
+This is a single-machine environment. A production setup of the same design would change:
+
+| Area | Here | Production |
+|---|---|---|
+| Cluster | kind on one machine | managed cluster (EKS, GKE, AKS) across availability zones, cluster autoscaler |
+| TLS | plain HTTP on 127.0.0.1 | cert-manager with Let's Encrypt or an internal CA, HTTPS only |
+| Human access | Argo CD local `admin`, client certificates | OIDC/SSO (Keycloak, Entra ID) for kubectl and Argo CD, groups from the identity provider |
+| Secrets | Sealed Secrets, key lives only in the cluster | External Secrets Operator with Vault or a cloud secret manager, or a backed-up sealing key |
+| Git workflow | direct pushes to `main` | branch protection, pull requests with required CI checks; a GitHub App for the bump commits |
+| Supply chain | pinned actions, checksummed tools | image scanning (Trivy), signing (cosign) verified at admission, SBOMs, Renovate for updates, Python lockfile |
+| Environments | one | dev / staging / prod (ApplicationSet or overlays) with promotion between them |
+| Argo CD | installed by a script, polls Git | manages itself, HA, Git webhooks, notifications |
+| Observability | 2 days of metrics, no dashboards, receivers without integrations | persistent or long-term storage (Thanos, Mimir), Grafana dashboards, Slack/PagerDuty with runbooks, logs and traces |
+| Policy | Pod Security Admission | plus a policy engine (Kyverno, Gatekeeper) for organisation-wide rules |
+| Availability | single Traefik replica, `preStop` hook missing | redundant ingress, `preStop` delay for zero-downtime rollouts, PriorityClasses |
+| Backup | none; the cluster is rebuilt from Git | Velero or provider snapshots for stateful data |
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `kind create cluster` fails on port 80/443 | another process listens on the port; stop it or change `hostPort` in `cluster/kind-config.yaml` |
+| pods fail with `too many open files` | inotify limits; re-run `scripts/setup-workstation.sh` |
+| `permission denied ... docker.sock` | the shell predates the `docker` group membership; open a new terminal or `wsl --shutdown` |
+| `aspecta` OutOfSync with `could not find ... monitoring.coreos.com/v1` | the CRDs arrived after the sync started; `retry` resolves it within minutes |
+| pods in `ImagePullBackOff` | the GHCR package is private or the tag does not exist; `kubectl -n aspecta describe pod <pod>` |
+| `aspecta-secrets` *Degraded* | the SealedSecret was sealed for another cluster; re-run `scripts/seal-backend-secret.sh` and commit |
+| a manual change in the cluster disappears | Argo CD self-heal; change it in Git instead |

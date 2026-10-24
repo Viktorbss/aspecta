@@ -28,8 +28,15 @@ spec:
           enabled: false
         kubeProxy:
           enabled: false
+        # UIs at http://prometheus.localhost and http://alertmanager.localhost through Traefik.
+        # Neither has a login; the kind port mapping binds to 127.0.0.1, so only this machine reaches them.
         prometheus:
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts: [prometheus.localhost]
           prometheusSpec:
+            externalUrl: http://prometheus.localhost # used in links, e.g. "Source" of an alert
             # pick up ServiceMonitors and PrometheusRules from every namespace, not only from this release
             serviceMonitorSelectorNilUsesHelmValues: false
             podMonitorSelectorNilUsesHelmValues: false
@@ -42,7 +49,12 @@ spec:
               limits:
                 memory: 1Gi
         alertmanager:
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts: [alertmanager.localhost]
           alertmanagerSpec:
+            externalUrl: http://alertmanager.localhost
             resources:
               requests:
                 cpu: 10m

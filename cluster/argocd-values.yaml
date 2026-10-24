@@ -1,5 +1,19 @@
 # Values for the Argo CD Helm chart installed by scripts/bootstrap.sh.
+global:
+  domain: argocd.localhost
 dex:
   enabled: false # no SSO; the local admin user is enough for this environment
 notifications:
   enabled: false
+configs:
+  cm:
+    url: http://argocd.localhost # the chart derives https:// from global.domain
+  params:
+    # Traefik terminates the connection and talks plain HTTP to argocd-server. Locally there is no TLS;
+    # in production Traefik (or the load balancer) terminates TLS with a real certificate.
+    server.insecure: true
+server:
+  # UI and API at http://argocd.localhost (host from global.domain), through Traefik like the application
+  ingress:
+    enabled: true
+    ingressClassName: traefik
