@@ -3,12 +3,17 @@
 import os
 import socket
 import time
+from datetime import UTC, datetime
 
 import uvicorn
 from fastapi import FastAPI, Query, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 
 APP_VERSION = os.getenv("APP_VERSION", "dev")
+# baked into the image by the release workflow; proves which build is running
+BUILD_TIME = os.getenv("BUILD_TIME", "unknown")
+# changes with every new pod; proves a rollout happened
+STARTED_AT = datetime.now(UTC).isoformat(timespec="seconds")
 
 REQUESTS = Counter("http_requests_total", "HTTP requests handled", ["method", "path", "status"])
 LATENCY = Histogram("http_request_duration_seconds", "HTTP request latency", ["method", "path"])
@@ -44,6 +49,8 @@ def info() -> dict:
     return {
         "message": os.getenv("APP_MESSAGE", "Hello from aspecta"),
         "version": APP_VERSION,
+        "built_at": BUILD_TIME,
+        "started_at": STARTED_AT,
         "hostname": socket.gethostname(),
         # never return the secret itself, only whether it was provided
         "secret_configured": bool(os.getenv("API_KEY")),

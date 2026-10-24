@@ -76,6 +76,10 @@ jobs:
           target: test
           push: false
           cache-from: type=gha,scope=backend
+      - id: build-info
+        run: |
+          echo "version=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
@@ -87,6 +91,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }} # source repository and commit
+          # shown on the web page, so a finished release is visible in the running application
+          build-args: |
+            VERSION=${{ steps.build-info.outputs.version }}
+            BUILD_TIME=${{ steps.build-info.outputs.time }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
 

@@ -20,6 +20,11 @@ ENV PATH="/venv/bin:$PATH" \
 COPY --from=build /venv /venv
 WORKDIR /srv
 COPY app/ app/
+# release metadata, set by the release workflow; last, so changing it does not invalidate earlier layers
+ARG VERSION=dev
+ARG BUILD_TIME=unknown
+ENV APP_VERSION=$VERSION \
+    BUILD_TIME=$BUILD_TIME
 # numeric UID, so Kubernetes runAsNonRoot can verify it without /etc/passwd
 USER 10001:10001
 EXPOSE 8000

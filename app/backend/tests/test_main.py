@@ -24,6 +24,8 @@ def test_info_reads_config_from_env(monkeypatch):
     assert body["message"] == "Hello from test"
     assert body["secret_configured"] is False
     assert body["hostname"]
+    assert body["built_at"]
+    assert body["started_at"]
 
 
 def test_info_never_returns_the_secret(monkeypatch):

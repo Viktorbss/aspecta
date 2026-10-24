@@ -302,6 +302,8 @@ Design notes:
 - **Immutable tags.** Images are tagged `sha-<commit>`, never `latest`; the chart pins the exact tag, so
   every deployment is traceable to a commit and a rollback is a `git revert`.
 - **Only changed components** are rebuilt and redeployed (`dorny/paths-filter`).
+- **Visible result.** Version and build time go into the images as build arguments and appear on the
+  web page under *Release*, so the end of the pipeline can be checked in the running application.
 - **No release loop.** Commits pushed with `GITHUB_TOKEN` do not trigger workflows, and the bump commit
   only touches `charts/`, outside the `paths` filter.
 - **Serialized releases.** A `concurrency` group runs releases one after another; `git pull --rebase`
@@ -611,8 +613,9 @@ Two containers. The browser talks only to the frontend, which proxies `/api/` to
 
 ### Backend
 
-- `GET /api/info` returns the message, version and pod hostname. Refreshing the page shows the load
-  balancing across replicas. It reports only whether `API_KEY` is set and never returns its value.
+- `GET /api/info` returns the message, version, build time, process start time and pod hostname.
+  Refreshing the page shows the load balancing across replicas. It reports only whether `API_KEY` is set
+  and never returns its value.
 - `GET /api/work?ms=100` burns CPU for `ms` milliseconds (1–500) and returns the pod hostname.
   It exists to demonstrate the HorizontalPodAutoscaler. The cap limits what a single request can cost;
   in production a demo endpoint like this would sit behind a feature flag.
@@ -627,7 +630,8 @@ Configuration comes from environment variables:
 |---|---|---|
 | `APP_MESSAGE` | ConfigMap | `Hello from aspecta` |
 | `LOG_LEVEL` | ConfigMap | `info` |
-| `APP_VERSION` | Helm chart (image tag) | `dev` |
+| `APP_VERSION` | Helm chart (image tag); also baked into the image | `dev` |
+| `BUILD_TIME` | baked into the image by the release workflow | `unknown` |
 | `API_KEY` | Secret | unset |
 | `PORT` | – | `8000` |
 
@@ -636,6 +640,12 @@ Configuration comes from environment variables:
 A static page that calls `/api/info`. nginx proxies `/api/` to the `backend` Service, so the browser needs
 no CORS and the backend is never exposed outside the cluster. `/healthz` is answered by nginx itself, so
 frontend probes do not fail when the backend is down.
+
+**Release:** the page shows the version and build time of both images and the start time of the backend
+pod. The release workflow bakes the version (`sha-<commit>`) and build time into each image as build
+arguments; the frontend gets them as `/version.json`, written at build time because the root filesystem
+is read-only at runtime. After a push to `app/`, a new version and build time on the page prove that
+the release built the image, and a new start time proves that Argo CD rolled it out.
 
 **Load test:** the *Generate load (60 s)* button runs 6 parallel request loops against `/api/work`
 and shows a table of which backend pods answered. The load goes through the Service, so it is spread

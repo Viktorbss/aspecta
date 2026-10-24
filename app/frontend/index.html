@@ -22,10 +22,18 @@
   <p id="message">Loading…</p>
   <dl>
     <dt>Backend pod</dt><dd id="hostname">–</dd>
-    <dt>Version</dt><dd id="version">–</dd>
     <dt>Secret configured</dt><dd id="secret">–</dd>
   </dl>
   <button id="reload" type="button">Call backend again</button>
+
+  <h2>Release</h2>
+  <p>Image tags set by the release workflow (<code>sha-&lt;commit&gt;</code>). The build time is baked into
+    each image; the start time changes with every new pod.</p>
+  <dl>
+    <dt>Frontend</dt><dd id="frontend-release">–</dd>
+    <dt>Backend</dt><dd id="backend-release">–</dd>
+    <dt>Backend pod started</dt><dd id="started">–</dd>
+  </dl>
 
   <h2>Load test</h2>
   <p>Sends parallel CPU-heavy requests to the backend for 60 seconds. When the HorizontalPodAutoscaler
@@ -48,16 +56,30 @@
         field("message").textContent = info.message;
         field("message").className = "";
         field("hostname").textContent = info.hostname;
-        field("version").textContent = info.version;
         field("secret").textContent = info.secret_configured ? "yes" : "no";
+        field("backend-release").textContent = `${info.version}, built ${info.built_at}`;
+        field("started").textContent = info.started_at;
       } catch (error) {
         field("message").textContent = `Backend unavailable: ${error.message}`;
         field("message").className = "error";
       }
     }
 
+    // written into the frontend image at build time
+    async function loadFrontendRelease() {
+      try {
+        const response = await fetch("/version.json", { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const release = await response.json();
+        field("frontend-release").textContent = `${release.version}, built ${release.built_at}`;
+      } catch (error) {
+        field("frontend-release").textContent = `unknown (${error.message})`;
+      }
+    }
+
     field("reload").addEventListener("click", load);
     load();
+    loadFrontendRelease();
 
     // --- load test ---
     const LOAD_SECONDS = 60;
