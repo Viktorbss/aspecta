@@ -216,7 +216,30 @@ can reach the internet or any other namespace.
 
 `aspecta-viewer` deliberately cannot read Secrets, `exec` into pods or `port-forward`, and has no write
 verbs: every change goes through Git and Argo CD. Group membership comes from the cluster's
-authentication (client certificate organisation, OIDC groups); the demo uses impersonation.
+authentication (client certificate organisation, OIDC groups).
+
+### Developer access
+
+`scripts/dev-user.sh` gives a person the `aspecta-viewer` Role with a client certificate signed by the
+cluster (`CN=<name>`, `O=aspecta-developers`) and writes a kubeconfig:
+
+```bash
+scripts/dev-user.sh create jana        # valid 24 h; "create jana 8" for 8 h
+export KUBECONFIG=~/.kube/aspecta-users/jana/kubeconfig
+kubectl get pods                       # allowed
+kubectl get secrets                    # Forbidden
+
+scripts/dev-user.sh list
+scripts/dev-user.sh delete jana
+```
+
+The private key, certificate and kubeconfig are stored in `~/.kube/aspecta-users/<name>/` with owner-only
+permissions, outside the repository.
+
+**Client certificates cannot be revoked.** `delete` removes the CSR and the local files, but a copied
+kubeconfig keeps working until the certificate expires, which is why the default validity is 24 hours.
+In production people log in through OIDC (Keycloak, Dex, Entra ID) and get their groups from the
+identity provider; the RoleBinding stays the same.
 
 ### Verify
 
