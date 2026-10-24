@@ -120,6 +120,7 @@ gitops/
 │   ├── namespaces.yaml   Application → gitops/namespaces/            wave -2
 │   ├── traefik.yaml      Application → Traefik Helm chart            wave -1
 │   ├── metrics-server.yaml  Application → metrics-server Helm chart  wave -1
+│   ├── sealed-secrets.yaml  Application → sealed-secrets Helm chart  wave -1
 │   └── aspecta.yaml      Application → charts/aspecta                wave 0
 └── namespaces/           Namespaces with Pod Security labels
 ```
@@ -129,6 +130,7 @@ gitops/
 | `namespaces` | platform | – | `gitops/namespaces` |
 | `traefik` | platform | `traefik` | Traefik chart 42.1.3 (Traefik v3.7.16) |
 | `metrics-server` | platform | `kube-system` | metrics-server chart 3.14.0 |
+| `sealed-secrets` | platform | `kube-system` | sealed-secrets chart 2.20.0 (controller v0.40.0) |
 | `aspecta` | aspecta | `aspecta` | `charts/aspecta` |
 
 Design notes:
@@ -167,6 +169,51 @@ kubectl -n argocd get applications      # all Synced and Healthy
 curl -s http://aspecta.localhost/api/info
 kubectl top pods -n aspecta             # metrics-server works
 kubectl get hpa -n aspecta              # CPU targets instead of <unknown>
+```
+
+## Secrets (Sealed Secrets)
+
+A Kubernetes Secret is only base64-encoded, so it cannot live in a public Git repository.
+[Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) solves this:
+
+- The **controller** (Application `sealed-secrets`, namespace `kube-system`) generates a key pair on its
+  first start. The private key never leaves the cluster.
+- **`kubeseal`** encrypts a Secret with the controller's public key into a `SealedSecret`, which is safe
+  to commit.
+- Argo CD applies the `SealedSecret`; the controller decrypts it into a regular Secret.
+
+The backend's `API_KEY` is sealed by `scripts/seal-backend-secret.sh` into
+`gitops/secrets/aspecta/backend-secret.yaml`:
+
+```bash
+API_KEY=<value> scripts/seal-backend-secret.sh   # without API_KEY a random 64-character key is generated
+```
+
+The plain Secret only exists in a pipe between `kubectl create secret --dry-run=client` and `kubeseal`;
+it is never written to disk and the value is not passed as a command-line argument. The script then asks
+the controller to validate that it can decrypt the result.
+
+The default `strict` scope binds the SealedSecret to its name and namespace: the same file copied to
+another namespace cannot be decrypted.
+
+**A new cluster has a new key.** After `kind delete cluster` and `scripts/bootstrap.sh`, re-run the
+script and commit the new file. In production the sealing key would be backed up, or secrets would come
+from an external store (External Secrets Operator with Vault or a cloud secret manager).
+
+**Pods read the Secret at start.** The backend gets `API_KEY` through `envFrom`. When the Secret
+appears or changes after the pods started, restart them once:
+
+```bash
+kubectl -n aspecta rollout restart deployment/backend
+```
+
+On a fresh cluster this is not needed: the secret is synced in an earlier wave than the application.
+
+Verify:
+
+```bash
+kubectl -n aspecta get sealedsecret,secret backend-secret
+curl -s http://aspecta.localhost/api/info      # "secret_configured": true
 ```
 
 ## Helm chart

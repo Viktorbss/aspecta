@@ -7,11 +7,12 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "-3" # projects must exist before the Applications that use them
 spec:
-  description: Cluster add-ons (namespaces, ingress controller, metrics-server)
+  description: Cluster add-ons (namespaces, ingress controller, metrics-server, sealed-secrets)
   sourceRepos:
     - https://github.com/Viktorbss/aspecta.git
     - https://traefik.github.io/charts
     - https://kubernetes-sigs.github.io/metrics-server
+    - https://bitnami.github.io/sealed-secrets
   destinations:
     - server: https://kubernetes.default.svc
       namespace: "*"
