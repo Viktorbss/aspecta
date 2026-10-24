@@ -24,11 +24,14 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      # spread replicas over the worker nodes
+      # spread replicas over the worker nodes, so losing one node never takes down all replicas
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: DoNotSchedule # a hard rule; ScheduleAnyway is only a preference
+          nodeTaintsPolicy: Honor # ignore nodes the pods cannot run on (the tainted control plane)
+          matchLabelKeys:
+            - pod-template-hash # during a rollout, spread the new ReplicaSet on its own
           labelSelector:
             matchLabels:
               {{- include "aspecta.selectorLabels" (dict "root" $ "component" "backend") | nindent 14 }}

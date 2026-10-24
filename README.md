@@ -251,7 +251,10 @@ Design notes:
   `emptyDir` with a 64 Mi limit.
 - **Probes.** Readiness and liveness use `/readyz` and `/healthz`. Probe timeouts are 3 s, because
   under CPU load the probe requests queue behind `/api/work`.
-- **Spread.** `topologySpreadConstraints` spread replicas across the nodes.
+- **Spread.** `topologySpreadConstraints` keep the replica counts of the two worker nodes within one
+  of each other (`DoNotSchedule`), so losing a node never takes down all replicas. `nodeTaintsPolicy:
+  Honor` leaves the tainted control plane out of the calculation, and `matchLabelKeys:
+  [pod-template-hash]` spreads each rollout's new ReplicaSet on its own.
 - **Pod labels.** Pod templates carry only the selector labels, so a chart version bump does not
   restart pods.
 
