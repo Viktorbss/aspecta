@@ -1,0 +1,49 @@
+{{- if .Values.rbac.enabled }}
+# Read-only view of the application. Deliberately missing: secrets, pods/exec, pods/portforward
+# and every write verb; changes go through Git and Argo CD.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: aspecta-viewer
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "aspecta") | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, services, configmaps, events, serviceaccounts]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [bitnami.com]
+    resources: [sealedsecrets] # encrypted, safe to read
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: aspecta-viewer
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "aspecta") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: aspecta-viewer
+subjects:
+  {{- range .Values.rbac.viewerGroups }}
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: {{ . }}
+  {{- end }}
+{{- end }}

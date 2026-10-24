@@ -174,6 +174,73 @@ kubectl top pods -n aspecta             # metrics-server works
 kubectl get hpa -n aspecta              # CPU targets instead of <unknown>
 ```
 
+## Security
+
+Three layers, all defined in Git: Pod Security Admission on the namespaces, NetworkPolicies and RBAC in
+the chart (`networkPolicy.enabled`, `rbac.enabled`).
+
+### Pod Security Admission
+
+| Namespace | Level | Why |
+|---|---|---|
+| `aspecta` | `restricted` enforced | the application needs no privileges at all |
+| `traefik` | `baseline` enforced, `restricted` warned | blocks host access and privileged containers |
+
+The API server rejects any pod in `aspecta` that runs as root, can escalate privileges, keeps Linux
+capabilities or lacks a seccomp profile.
+
+### NetworkPolicies
+
+Zero trust inside `aspecta`: `default-deny-all` blocks all ingress and egress, and one policy per flow
+allows only what the application needs. Calico enforces them.
+
+| Policy | Allowed flow |
+|---|---|
+| `allow-dns` | all pods → CoreDNS in `kube-system`, port 53 |
+| `frontend-from-ingress` | namespace `traefik` → frontend :8080 |
+| `frontend-to-backend` | frontend → backend :8000 (egress side) |
+| `backend-from-frontend` | frontend → backend :8000 (ingress side) |
+| `backend-from-monitoring` | namespace `monitoring` → backend :8000 (`/metrics`) |
+
+A flow between two pods in the namespace needs both an egress rule on the sender and an ingress rule on
+the receiver. The backend has no egress except DNS; the frontend can reach only the backend. Neither
+can reach the internet or any other namespace.
+
+### RBAC
+
+| Identity | Permissions |
+|---|---|
+| ServiceAccounts `frontend`, `backend` | none; no API token is mounted into the pods |
+| Group `aspecta-developers` | Role `aspecta-viewer`: read pods, logs, Deployments, Services, HPAs, Ingresses, NetworkPolicies, SealedSecrets in `aspecta` |
+| Argo CD AppProject `aspecta` | deploy from this repository into `aspecta` only, no cluster-scoped resources |
+
+`aspecta-viewer` deliberately cannot read Secrets, `exec` into pods or `port-forward`, and has no write
+verbs: every change goes through Git and Argo CD. Group membership comes from the cluster's
+authentication (client certificate organisation, OIDC groups); the demo uses impersonation.
+
+### Verify
+
+```bash
+# RBAC
+kubectl auth can-i list pods        -n aspecta --as=dev --as-group=aspecta-developers   # yes
+kubectl auth can-i get secrets      -n aspecta --as=dev --as-group=aspecta-developers   # no
+kubectl auth can-i create pods/exec -n aspecta --as=dev --as-group=aspecta-developers   # no
+kubectl auth can-i delete pods      -n aspecta --as=dev --as-group=aspecta-developers   # no
+
+# Pod Security: rejected, the busybox image runs as root
+kubectl -n aspecta run root-test --image=busybox --restart=Never -- sleep 1
+
+# NetworkPolicy: the application still works through the allowed flows
+curl -s http://aspecta.localhost/api/info
+
+# from another namespace the backend is unreachable: "download timed out"
+kubectl -n default run np-test --rm -it --image=busybox --restart=Never -- \
+  wget -qO- -T3 http://backend.aspecta:8000/healthz
+
+# the frontend cannot reach the internet: "download timed out"
+kubectl -n aspecta exec deploy/frontend -- wget -qO- -T3 http://example.com
+```
+
 ## Secrets (Sealed Secrets)
 
 A Kubernetes Secret is only base64-encoded, so it cannot live in a public Git repository.
@@ -233,6 +300,8 @@ curl -s http://aspecta.localhost/api/info      # "secret_configured": true
 | ConfigMap | – | `backend-config` (from `backend.config`) |
 | Secret | – | `backend-secret`, optional (created from a SealedSecret) |
 | Ingress | `aspecta.localhost` → `frontend` (class `traefik`) | – |
+| NetworkPolicy | default deny + allowed flows, see [Security](#security) | same |
+| Role / RoleBinding | `aspecta-viewer` for group `aspecta-developers` | same |
 
 Design notes:
 

@@ -1,0 +1,129 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $frontend := include "aspecta.selectorLabels" (dict "root" $ "component" "frontend") }}
+{{- $backend := include "aspecta.selectorLabels" (dict "root" $ "component" "backend") }}
+# Everything in the namespace is denied; the policies below allow each needed flow explicitly
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "aspecta") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# name resolution, e.g. nginx resolving the "backend" Service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "aspecta") | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# ingress controller → frontend
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-from-ingress
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "frontend") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $frontend | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.frontend.port }}
+---
+# frontend → backend (nginx proxies /api/), outgoing side
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-to-backend
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "frontend") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $frontend | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- $backend | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.backend.port }}
+---
+# frontend → backend, incoming side; both sides must allow a flow
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-from-frontend
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "backend") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $backend | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- $frontend | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.backend.port }}
+---
+# Prometheus → backend /metrics
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-from-monitoring
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "backend") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $backend | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.backend.port }}
+{{- end }}

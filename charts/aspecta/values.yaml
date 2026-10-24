@@ -81,3 +81,16 @@ ingress:
   enabled: true
   className: traefik
   host: aspecta.localhost
+
+# Deny all traffic in the namespace, then allow only the flows the application needs
+networkPolicy:
+  enabled: true
+  ingressNamespace: traefik # the ingress controller may reach the frontend
+  monitoringNamespace: monitoring # Prometheus may scrape the backend's /metrics
+
+# Read-only Role "aspecta-viewer" for these groups: no Secrets, no exec, no port-forward.
+# Changes go through Git and Argo CD, so people need no write access in the namespace.
+rbac:
+  enabled: true
+  viewerGroups:
+    - aspecta-developers
