@@ -1,0 +1,135 @@
+# Release on every change under app/: build and push the changed images to GHCR, set their tags in the
+# Helm chart, bump the chart version, commit to main and publish the packaged chart.
+# Argo CD then deploys the bump commit; this workflow never talks to the cluster.
+#
+# No loop: commits pushed with GITHUB_TOKEN do not trigger workflows, and the bump commit only
+# touches charts/, which is outside the `paths` filter anyway.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**"]
+  workflow_dispatch: {} # builds both images, e.g. for the first release
+
+# releases run one after another, never in parallel or cancelled halfway
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  IMAGE_PREFIX: ghcr.io/viktorbss/aspecta # + -backend / -frontend, as in charts/aspecta/values.yaml
+  CHART_REPO: oci://ghcr.io/viktorbss/charts
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changed components
+    runs-on: ubuntu-latest
+    outputs:
+      components: ${{ steps.list.outputs.components }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            backend: app/backend/**
+            frontend: app/frontend/**
+      - id: list
+        env:
+          EVENT: ${{ github.event_name }}
+          CHANGED: ${{ steps.filter.outputs.changes }} # JSON list, e.g. ["backend"]
+        run: |
+          if [[ "$EVENT" == workflow_dispatch ]]; then
+            echo 'components=["backend","frontend"]' >> "$GITHUB_OUTPUT"
+          else
+            echo "components=$CHANGED" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build and push ${{ matrix.component }}
+    needs: changes
+    if: needs.changes.outputs.components != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+    strategy:
+      matrix:
+        component: ${{ fromJSON(needs.changes.outputs.components) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Test
+        if: matrix.component == 'backend'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app/backend
+          target: test
+          push: false
+          cache-from: type=gha,scope=backend
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.component }}
+          tags: type=sha,prefix=sha-,format=short # sha-<7 characters>; immutable, never "latest"
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: app/${{ matrix.component }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }} # source repository and commit
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+
+  bump-chart:
+    name: Bump chart and publish
+    needs: [changes, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # commit the bump to main
+      packages: write # push the chart to GHCR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - name: Set image tags and bump chart version
+        env:
+          COMPONENTS: ${{ needs.changes.outputs.components }}
+        run: |
+          # yq rewrites the whole file and drops blank lines; apply only its real changes
+          yq_set() { yq "$1" "$2" | { diff -B "$2" - || true; } | patch --quiet "$2"; }
+          tag="sha-${GITHUB_SHA::7}" # same tag as docker/metadata-action produced
+          for component in $(jq -r '.[]' <<<"$COMPONENTS"); do
+            yq_set ".${component}.image.tag = \"${tag}\"" charts/aspecta/values.yaml
+          done
+          version="$(yq '.version' charts/aspecta/Chart.yaml)"
+          next="${version%.*}.$((${version##*.} + 1))" # patch bump: 0.1.4 -> 0.1.5
+          yq_set ".version = \"${next}\" | .appVersion = \"${tag}\"" charts/aspecta/Chart.yaml
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=$next" >> "$GITHUB_ENV"
+          git diff
+      - name: Commit to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): chart ${VERSION}, images ${TAG} [skip ci]"
+          git pull --rebase origin main # main may have moved while the images were building
+          git push origin HEAD:main
+      - name: Package and push chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          helm package charts/aspecta --destination dist
+          printf '%s' "$GH_TOKEN" | helm registry login ghcr.io --username "$ACTOR" --password-stdin
+          helm push "dist/aspecta-${VERSION}.tgz" "$CHART_REPO"

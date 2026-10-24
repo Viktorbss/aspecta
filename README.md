@@ -174,6 +174,55 @@ kubectl top pods -n aspecta             # metrics-server works
 kubectl get hpa -n aspecta              # CPU targets instead of <unknown>
 ```
 
+## CI/CD (GitHub Actions)
+
+Two workflows in `.github/workflows/`. Neither has access to the cluster: CI publishes images and
+commits to Git, Argo CD pulls the change.
+
+```
+push app/** to main
+  └─ release.yaml
+       ├─ changes      which components changed (backend, frontend or both)
+       ├─ build        per component: tests (backend), build, push ghcr.io/viktorbss/aspecta-<component>:sha-<7>
+       └─ bump-chart   values.yaml image tag, Chart.yaml version +0.0.1 and appVersion,
+                       commit "chore(release): ..." to main, helm package + push oci://ghcr.io/viktorbss/charts
+                              │
+                              ▼
+                     Argo CD sees the commit (≤ 3 min) and rolls out the new image
+```
+
+| Workflow | Trigger | Jobs |
+|---|---|---|
+| `ci.yaml` | every pull request and push to `main` | backend tests (`docker build --target test`), frontend build, `helm lint`, `kubeconform` on the rendered chart and on `gitops/` |
+| `release.yaml` | push to `main` touching `app/**`; manual run builds both images | build and push changed images, bump chart, commit, publish chart |
+
+Design notes:
+
+- **Immutable tags.** Images are tagged `sha-<commit>`, never `latest`; the chart pins the exact tag, so
+  every deployment is traceable to a commit and a rollback is a `git revert`.
+- **Only changed components** are rebuilt and redeployed (`dorny/paths-filter`).
+- **No release loop.** Commits pushed with `GITHUB_TOKEN` do not trigger workflows, and the bump commit
+  only touches `charts/`, outside the `paths` filter.
+- **Serialized releases.** A `concurrency` group runs releases one after another; `git pull --rebase`
+  before the push handles commits that landed during the build.
+- **Least privilege.** The default token permission is `contents: read`; only the jobs that need it get
+  `packages: write` (push to GHCR) or `contents: write` (commit the bump).
+- **Pinned actions.** Every action is pinned to a full commit SHA with the version in a comment, so a
+  moved or compromised tag cannot change what runs.
+- **No script injection.** Values from `${{ }}` expressions reach `run:` scripts only through `env`.
+- **Minimal diffs.** `yq` drops blank lines when it rewrites a file, so the bump applies only `yq`'s real
+  changes (`diff -B | patch`).
+
+### First release
+
+1. Push the workflows, then start *Release* manually (Actions → Release → Run workflow) to publish
+   both images and the chart.
+2. GHCR creates new packages as private. Make `aspecta-backend`, `aspecta-frontend` and `charts/aspecta`
+   public (GitHub → Packages → package → Package settings → Change visibility), so kind can pull the
+   images without credentials.
+3. Remove `values-local.yaml` from `gitops/apps/aspecta.yaml`. Argo CD then deploys the images from GHCR
+   with the tags the release committed.
+
 ## Security
 
 Three layers, all defined in Git: Pod Security Admission on the namespaces, NetworkPolicies and RBAC in
