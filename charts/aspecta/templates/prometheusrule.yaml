@@ -1,0 +1,69 @@
+{{- if .Values.monitoring.enabled }}
+{{- $ns := .Release.Namespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: aspecta
+  labels:
+    {{- include "aspecta.labels" (dict "root" $ "component" "aspecta") | nindent 4 }}
+spec:
+  groups:
+    - name: aspecta.rules
+      rules:
+        # no backend pod answers the scrape, or none exists at all
+        - alert: AspectaBackendDown
+          expr: absent(up{job="backend", namespace="{{ $ns }}"} == 1)
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: No backend replica is up
+            description: Prometheus has not scraped any healthy backend pod in {{ $ns }} for 2 minutes.
+
+        - alert: AspectaHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{job="backend", namespace="{{ $ns }}", status=~"5.."}[5m]))
+              /
+            sum(rate(http_requests_total{job="backend", namespace="{{ $ns }}"}[5m]))
+              > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than 5 % of backend requests fail
+            description: '{{ "{{" }} $value | humanizePercentage {{ "}}" }} of backend requests returned 5xx over the last 5 minutes.'
+
+        - alert: AspectaHighLatencyP95
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_request_duration_seconds_bucket{job="backend", namespace="{{ $ns }}"}[5m]))
+            ) > 0.5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Backend p95 latency above 500 ms
+            description: 95 % of backend requests take up to {{ "{{" }} $value | humanizeDuration {{ "}}" }}.
+
+        # kube_* metrics come from kube-state-metrics
+        - alert: AspectaPodCrashLooping
+          expr: increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}[15m]) > 3
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: A container keeps restarting
+            description: Container {{ "{{" }} $labels.container {{ "}}" }} in pod {{ "{{" }} $labels.pod {{ "}}" }} restarted more than 3 times in 15 minutes.
+
+        - alert: AspectaReplicasMismatch
+          expr: |
+            kube_deployment_status_replicas_available{namespace="{{ $ns }}"}
+              <
+            kube_deployment_spec_replicas{namespace="{{ $ns }}"}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Deployment has fewer available replicas than desired
+            description: Deployment {{ "{{" }} $labels.deployment {{ "}}" }} has been missing replicas for 10 minutes.
+{{- end }}

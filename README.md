@@ -122,6 +122,7 @@ gitops/
 │   ├── metrics-server.yaml  Application → metrics-server Helm chart  wave -1
 │   ├── sealed-secrets.yaml  Application → sealed-secrets Helm chart  wave -1
 │   ├── aspecta-secrets.yaml Application → gitops/secrets/aspecta/    wave -1
+│   ├── kube-prometheus-stack.yaml Application → monitoring stack     wave -1
 │   └── aspecta.yaml      Application → charts/aspecta                wave 0
 ├── namespaces/           Namespaces with Pod Security labels
 └── secrets/aspecta/      SealedSecrets, encrypted for this cluster
@@ -134,6 +135,7 @@ gitops/
 | `metrics-server` | platform | `kube-system` | metrics-server chart 3.14.0 |
 | `sealed-secrets` | platform | `kube-system` | sealed-secrets chart 2.20.0 (controller v0.40.0) |
 | `aspecta-secrets` | aspecta | `aspecta` | `gitops/secrets/aspecta` |
+| `kube-prometheus-stack` | platform | `monitoring` | kube-prometheus-stack chart 92.3.0 (Prometheus Operator v0.94.1) |
 | `aspecta` | aspecta | `aspecta` | `charts/aspecta` |
 
 Design notes:
@@ -224,6 +226,77 @@ Design notes:
 3. Remove `values-local.yaml` from `gitops/apps/aspecta.yaml`. Argo CD then deploys the images from GHCR
    with the tags the release committed.
 
+## Monitoring and alerting
+
+The Application `kube-prometheus-stack` installs the Prometheus Operator, Prometheus, Alertmanager,
+kube-state-metrics and node-exporter into `monitoring`. The application chart adds two resources the
+operator picks up:
+
+- **ServiceMonitor `backend`**: Prometheus scrapes `/metrics` of every backend pod every 15 s
+  (job `backend`). The NetworkPolicy `backend-from-monitoring` allows exactly this flow.
+- **PrometheusRule `aspecta`**: the alerts below.
+
+| Alert | Condition | For | Severity |
+|---|---|---|---|
+| `AspectaBackendDown` | no backend target is up, or none exists | 2m | critical |
+| `AspectaHighErrorRate` | more than 5 % of backend requests return 5xx | 5m | warning |
+| `AspectaHighLatencyP95` | p95 backend latency above 500 ms | 5m | warning |
+| `AspectaPodCrashLooping` | more than 3 container restarts in 15 minutes | 5m | warning |
+| `AspectaReplicasMismatch` | a Deployment has fewer available replicas than desired | 10m | warning |
+
+The first three use the application's own metrics (`up`, `http_requests_total`,
+`http_request_duration_seconds`); the last two use kube-state-metrics.
+
+Alertmanager groups alerts by name and namespace and routes `critical` alerts to a separate receiver
+with a shorter repeat interval. A firing critical alert inhibits warnings with the same name. The
+receivers have no integrations, so alerts are visible in the Alertmanager UI; a real setup adds e.g.
+`slack_configs` with the webhook URL from a SealedSecret. The always-firing `Watchdog` alert goes to the
+`null` receiver.
+
+kind-specific choices:
+
+- **Control plane scraping is disabled** (`kubeEtcd`, `kubeControllerManager`, `kubeScheduler`,
+  `kubeProxy`). In kind these components listen on 127.0.0.1 only; scraping them fails and fires
+  `*Down` alerts that say nothing about the application.
+- **No Grafana.** Not required for the task, and it would need its admin password handled as a secret.
+  Prometheus and Alertmanager have their own UIs.
+- **Short retention** (2 days) and modest resource requests.
+
+### Use
+
+```bash
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-prometheus 9090    # http://localhost:9090
+kubectl -n monitoring port-forward svc/kube-prometheus-stack-alertmanager 9093  # http://localhost:9093
+```
+
+In Prometheus: *Status → Targets* shows `serviceMonitor/aspecta/backend/0` with two targets up;
+*Alerts* lists the five `Aspecta*` rules.
+
+Useful queries:
+
+```promql
+sum by (path, status) (rate(http_requests_total{job="backend"}[1m]))       # requests per second
+histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job="backend"}[1m])))
+sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="aspecta", container="backend"}[1m]))
+```
+
+### Trigger an alert
+
+`AspectaBackendDown`: scale the backend to zero.
+
+```bash
+kubectl -n aspecta scale deployment/backend --replicas=0
+# after ~2 minutes: AspectaBackendDown is firing in Prometheus and Alertmanager
+kubectl -n aspecta scale deployment/backend --replicas=2
+```
+
+Neither Argo CD nor the HPA undoes the scale-down: the chart leaves `spec.replicas` out of the
+Deployment, so Argo CD's self-heal does not manage that field, and an HPA does not act on a Deployment
+scaled to zero (`ScalingActive: False`, reason `ScalingDisabled`).
+
+`AspectaHighLatencyP95`: start *Generate load* on the web page a few times in a row; queued
+`/api/work` requests push the p95 above 500 ms until the HPA has added replicas.
+
 ## Security
 
 Three layers, all defined in Git: Pod Security Admission on the namespaces, NetworkPolicies and RBAC in
@@ -235,6 +308,7 @@ the chart (`networkPolicy.enabled`, `rbac.enabled`).
 |---|---|---|
 | `aspecta` | `restricted` enforced | the application needs no privileges at all |
 | `traefik` | `baseline` enforced, `restricted` warned | blocks host access and privileged containers |
+| `monitoring` | `privileged` | node-exporter needs hostNetwork, hostPID and hostPath to read node metrics |
 
 The API server rejects any pod in `aspecta` that runs as root, can escalate privileges, keeps Linux
 capabilities or lacks a seccomp profile.

@@ -54,6 +54,6 @@ jobs:
           helm lint charts/aspecta
           helm lint charts/aspecta -f charts/aspecta/values-local.yaml
       - name: Validate rendered chart
-        run: helm template aspecta charts/aspecta | kubeconform -strict -summary
+        run: helm template aspecta charts/aspecta | kubeconform -strict -summary -schema-location default -schema-location "$CRD_SCHEMAS"
       - name: Validate GitOps manifests
         run: kubeconform -strict -summary -schema-location default -schema-location "$CRD_SCHEMAS" gitops/

@@ -1,0 +1,91 @@
+# Prometheus, Alertmanager, kube-state-metrics and node-exporter, managed by the Prometheus Operator
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1" # its CRDs (ServiceMonitor, PrometheusRule) before the application
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: platform
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 92.3.0 # Prometheus Operator v0.94.1
+    helm:
+      valuesObject:
+        grafana:
+          enabled: false # not required; metrics and alerts are visible in the Prometheus and Alertmanager UIs
+        # kind's control plane components listen on 127.0.0.1 only; scraping them would fail
+        # and fire *Down alerts that say nothing about the application
+        kubeEtcd:
+          enabled: false
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeProxy:
+          enabled: false
+        prometheus:
+          prometheusSpec:
+            # pick up ServiceMonitors and PrometheusRules from every namespace, not only from this release
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            retention: 2d
+            resources:
+              requests:
+                cpu: 100m
+                memory: 400Mi
+              limits:
+                memory: 1Gi
+        alertmanager:
+          alertmanagerSpec:
+            resources:
+              requests:
+                cpu: 10m
+                memory: 32Mi
+              limits:
+                memory: 128Mi
+          config:
+            route:
+              receiver: default
+              group_by: [alertname, namespace]
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              routes:
+                # Watchdog always fires to prove the alerting pipeline works; nobody needs to see it
+                - receiver: "null"
+                  matchers: ['alertname = "Watchdog"']
+                - receiver: critical
+                  matchers: ['severity = "critical"']
+                  repeat_interval: 1h
+            # Receivers without integrations: alerts are shown in the Alertmanager UI.
+            # A real setup adds e.g. slack_configs with the webhook URL from a SealedSecret.
+            receivers:
+              - name: "null"
+              - name: default
+              - name: critical
+            inhibit_rules:
+              # a firing critical alert silences the warnings with the same name in the same namespace
+              - source_matchers: ['severity = "critical"']
+                target_matchers: ['severity = "warning"']
+                equal: [alertname, namespace]
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ServerSideApply=true # the Prometheus Operator CRDs are too large for client-side apply
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

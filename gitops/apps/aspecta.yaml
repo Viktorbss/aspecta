@@ -24,6 +24,10 @@ spec:
     automated:
       prune: true
       selfHeal: true
+    syncOptions:
+      # the ServiceMonitor and PrometheusRule CRDs may not exist yet on a fresh cluster;
+      # skip their dry run instead of failing the whole sync
+      - SkipDryRunOnMissingResource=true
     retry:
       limit: 5
       backoff:

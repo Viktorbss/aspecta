@@ -88,6 +88,12 @@ networkPolicy:
   ingressNamespace: traefik # the ingress controller may reach the frontend
   monitoringNamespace: monitoring # Prometheus may scrape the backend's /metrics
 
+# ServiceMonitor (Prometheus scrapes the backend's /metrics) and PrometheusRule (alerts);
+# both need the Prometheus Operator CRDs from kube-prometheus-stack
+monitoring:
+  enabled: true
+  scrapeInterval: 15s
+
 # Read-only Role "aspecta-viewer" for these groups: no Secrets, no exec, no port-forward.
 # Changes go through Git and Argo CD, so people need no write access in the namespace.
 rbac:
