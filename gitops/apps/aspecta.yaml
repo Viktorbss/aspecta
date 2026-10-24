@@ -16,9 +16,7 @@ spec:
     helm:
       releaseName: aspecta
       valueFiles:
-        - values.yaml
-        # temporary: images loaded into kind with `kind load` until CI publishes them to GHCR
-        - values-local.yaml
+        - values.yaml # image tags are set by the release workflow
   destination:
     server: https://kubernetes.default.svc
     namespace: aspecta

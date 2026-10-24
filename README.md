@@ -153,8 +153,9 @@ Design notes:
   The application is at http://aspecta.localhost.
 - **Bootstrap outside Git.** Calico (Argo CD needs a pod network) and Argo CD itself are installed by the
   script. In production Argo CD would also manage itself.
-- **Images.** Until CI publishes images to GHCR, the `aspecta` Application adds `values-local.yaml`, so
-  the locally built images must be loaded with `kind load` (see "Install manually" below).
+- **Images** come from GHCR (`ghcr.io/viktorbss/aspecta-*`, public) with the tags the release workflow
+  commits to `charts/aspecta/values.yaml`. `values-local.yaml` is only for installing the chart by hand
+  with locally built images (see "Install manually" below).
 
 Access the Argo CD UI:
 
@@ -401,8 +402,9 @@ Design notes:
 
 ### Install manually
 
-Until the CI pipeline publishes images to GHCR, load the locally built images into kind and install the
-chart with `values-local.yaml`:
+Argo CD installs the chart; this is for trying chart changes by hand before committing them. Load locally
+built images into kind and install the chart with `values-local.yaml` into a cluster without the
+`aspecta` Argo CD Application (otherwise Helm and Argo CD would manage the same resources):
 
 ```bash
 docker build -t aspecta-backend:dev app/backend
